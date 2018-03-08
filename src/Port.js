@@ -2,6 +2,7 @@
 
 const http = require('http');
 
+const _ = require('lodash');
 const bodyParser = require('body-parser');
 const cookieParser = require('cookie-parser');
 const cors = require('cors');
@@ -13,43 +14,67 @@ const httpLogger = require('@cork-labs/http-middleware-logger');
 const httpResponses = require('@cork-labs/http-middleware-responses');
 const httpTrace = require('@cork-labs/http-middleware-trace');
 
+const defaults = {
+  port: null,
+  name: '@cork-labs/monkfish-port-http/port',
+  cors: {},
+  cookies: {},
+  responses: {},
+  trace: {},
+  error: {
+    map: {}
+  }
+};
+
+const corsEchoOrigin = (origin, cb) => cb(null, origin);
+
 class Port {
   constructor (logger, config) {
     this._logger = logger;
-    this._config = config;
+    this._config = _.merge({}, defaults, config);
     this._port = this._normalizePort(this._config.port);
-    this._name = config.name || 'Port';
+    this._name = this._config.name;
 
-    this._errorMiddlewares = [];
+    if (this._config.cors.origin === 'echo') {
+      this._config.cors.origin = corsEchoOrigin;
+    }
 
     this._express = express();
     this._server = http.createServer(this._express);
 
-    this._express.use(cors(config.cors));
     this._express.use(bodyParser.json());
     this._express.use(cookieParser());
 
-    this._express.use(httpCookies(config.cookies));
-    this._express.use(httpResponses(config.responses));
-    this._express.use(httpTrace(config.trace));
-    this._express.use(httpLogger(config.logger, logger));
+    this._express.use(httpCookies(this._config.cookies));
+    this._express.use(httpResponses(this._config.responses));
+    this._express.use(httpTrace(this._config.trace));
+    this._express.use(httpLogger(this._config.logger, logger));
     this._express.use((req, res, next) => {
       onHeaders(res, () => res.log());
       next();
     });
+
+    this._express.use(cors(this._config.cors));
+
+    this._errorMiddlewares = [(req, res, error) => {
+      const handler = this._config.error.map[error.name];
+      if (handler) {
+        return res.response[handler.response](handler.details ? error.details : null);
+      }
+      throw error;
+    }];
   }
 
   _handleError (error, req, res, middlewares) {
-    if (!middlewares.length) {
-      throw error;
-    }
-    const middleware = middlewares.shift();
     return Promise.resolve()
       .then(() => {
-        middleware(req, res, error);
-      })
-      .catch((error) => {
-        return this._handleError(error, req, res, middlewares);
+        if (!middlewares.length) {
+          throw error;
+        }
+        const middleware = middlewares.shift();
+        return Promise.resolve()
+          .then(() => middleware(req, res, error))
+          .catch((error) => this._handleError(error, req, res, middlewares));
       });
   }
 
@@ -88,7 +113,7 @@ class Port {
     this._express.use(middleware);
   }
 
-  errorMap (middleware) {
+  addErrorHandler (middleware) {
     this._errorMiddlewares.push(middleware);
   }
 
@@ -109,7 +134,11 @@ class Port {
         .catch((err) => {
           req.logger.error({ err }, this._name + '::unhandled()');
           if (!res.headersSent) {
-            res.response.internalServerError();
+            if (this._config.error.debug) {
+              return res.response.internalServerError({ error: err.name, details: err.details });
+            } else {
+              res.response.internalServerError();
+            }
           }
         });
     });
