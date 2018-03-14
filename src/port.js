@@ -1,6 +1,8 @@
 'use strict';
 
+const fs = require('fs');
 const http = require('http');
+const https = require('https');
 
 const _ = require('lodash');
 const bodyParser = require('body-parser');
@@ -14,9 +16,16 @@ const httpLogger = require('@cork-labs/http-middleware-logger');
 const httpResponses = require('@cork-labs/http-middleware-responses');
 const httpTrace = require('@cork-labs/http-middleware-trace');
 
+const Interceptor = require('./interceptor');
+
 const defaults = {
   port: null,
-  name: '@cork-labs/monkfish-port-http/port',
+  name: 'monkfish.port.http',
+  https: {
+    key: './key.pem',
+    cert: './key.pem'
+  },
+  hostname: 'localhost',
   cors: {},
   cookies: {},
   responses: {},
@@ -35,12 +44,25 @@ class Port {
     this._port = this._normalizePort(this._config.port);
     this._name = this._config.name;
 
+    this._pre = [];
+    this._post = [];
+    this._interceptors = {};
+
     if (this._config.cors.origin === 'echo') {
       this._config.cors.origin = corsEchoOrigin;
     }
 
     this._express = express();
-    this._server = http.createServer(this._express);
+
+    if (this._config.https) {
+      const options = {
+        key: fs.readFileSync(this._config.https.key),
+        cert: fs.readFileSync(this._config.https.cert)
+      };
+      this._server = https.createServer(options, this._express);
+    } else {
+      this._server = http.createServer(this._express);
+    }
 
     this._express.use(bodyParser.json());
     this._express.use(cookieParser());
@@ -56,36 +78,49 @@ class Port {
 
     this._express.use(cors(this._config.cors));
 
-    this._errorMiddlewares = [(req, res, error) => {
+    this._errorHandlers = [(req, res, error) => {
       const handler = this._config.error.map[error.name];
       if (handler) {
-        return res.response[handler.response](handler.details ? error.details : null);
+        let details = null;
+        if (handler.details === true) {
+          details = error.details;
+        } else if (handler.details) {
+          details = handler.details;
+        }
+        return res.response[handler.response](error.name, details);
       }
       throw error;
     }];
   }
 
-  _handleError (error, req, res, middlewares) {
+  _handleError (error, req, res, errorHandlers) {
     return Promise.resolve()
       .then(() => {
-        if (!middlewares.length) {
+        if (!errorHandlers.length) {
           throw error;
         }
-        const middleware = middlewares.shift();
+        const errorHandler = errorHandlers.shift();
         return Promise.resolve()
-          .then(() => middleware(req, res, error))
-          .catch((error) => this._handleError(error, req, res, middlewares));
+          .then(() => errorHandler(req, res, error))
+          .catch((error) => this._handleError(error, req, res, errorHandlers));
       });
   }
 
+  _info () {
+    return {
+      api: this._name,
+      https: !!this._config.https,
+      host: this._config.hostname
+    };
+  }
+
   _onError (err) {
-    const address = this._express.address();
     switch (err.code) {
       case 'EACCES':
-        this._logger.error({ err, address }, this._name + '::onListening() privileges required');
+        this._logger.error(Object.assign({}, { err }, this._info()), 'monkfish.port.http.privileges-required');
         process.exit(1);
       case 'EADDRINUSE':
-        this._logger.error({ err, address }, this._name + '::onListening() already in use');
+        this._logger.error(Object.assign({}, { err }, this._info()), 'monkfish.port.http.already-in-use');
         process.exit(1);
       default:
         throw err;
@@ -93,8 +128,9 @@ class Port {
   }
 
   _onListening () {
-    const address = this._server.address();
-    this._logger.info({ address: address.address, port: address.port }, this._name + '::onListening()');
+    const obj = this._server.address();
+    const address = obj.address + ':' + obj.port;
+    this._logger.info({ address }, 'monkfish.port.http.listening');
   }
 
   _normalizePort (value) {
@@ -109,33 +145,55 @@ class Port {
 
   // -- public
 
-  use (middleware) {
-    this._express.use(middleware);
+  interceptor (interceptor) {
+    if (!Interceptor.isInterceptor(interceptor)) {
+      throw new Error(`Invalid interceptor.`);
+    }
+    if (this._interceptors[interceptor.constructor.name]) {
+      throw new Error(`Duplicate interceptor ${interceptor.constructor.name}.`);
+    }
+    this._interceptors[interceptor.constructor.name] = interceptor;
   }
 
-  addErrorHandler (middleware) {
-    this._errorMiddlewares.push(middleware);
+  errorHandler (errorHandler) {
+    this._errorHandlers.push(errorHandler);
+  }
+
+  pre (interceptor) {
+    if (typeof interceptor !== 'function' || !interceptor.name) {
+      throw new Error(`Invalid pre interceptor in ${this._name} router.`);
+    }
+    this._pre.push(interceptor);
+  }
+
+  post (interceptor) {
+    if (typeof interceptor !== 'function' || !interceptor.name) {
+      throw new Error(`Invalid post interceptor in ${this._name} router.`);
+    }
+    this._post.push(interceptor);
   }
 
   route (path, router) {
-    this._express.use(path, router);
+    this._express.use(path, router.build(this._interceptors, this._pre, this._post));
   }
 
   notFound (notFoundFn) {
     this._notFoundFn = notFoundFn;
   }
 
+  // -- execute
+
   start () {
     // not found
     this._express.use(this._notFoundFn);
     // errors
     this._express.use((err, req, res, next) => {
-      this._handleError(err, req, res, this._errorMiddlewares.slice(0))
+      this._handleError(err, req, res, this._errorHandlers.slice(0))
         .catch((err) => {
-          req.logger.error({ err }, this._name + '::unhandled()');
+          req.logger.error({ err, api: this._name }, 'monkfish.port.http.unhandled');
           if (!res.headersSent) {
             if (this._config.error.debug) {
-              return res.response.internalServerError({ error: err.name, details: err.details });
+              return res.response.internalServerError(err.name, err.details);
             } else {
               res.response.internalServerError();
             }
@@ -144,7 +202,7 @@ class Port {
     });
 
     return new Promise((resolve, reject) => {
-      this._logger.info({ port: this._port }, this._name + '::start()');
+      this._logger.info(this._info(), 'monkfish.port.http.start');
       this._server.listen(this._port);
       this._server.on('error', this._onError.bind(this));
       this._server.on('listening', () => {

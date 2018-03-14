@@ -6,16 +6,16 @@ const expect = chai.expect;
 const sinonChai = require('sinon-chai');
 chai.use(sinonChai);
 
-const Router = require('../src/Router');
+const Port = require('../src/port');
 
-describe('Router', function () {
+describe('Port', function () {
   it('should be a function', function () {
-    expect(Router).to.be.a('function');
+    expect(Port).to.be.a('function');
   });
 
   describe('api', function () {
     beforeEach(function () {
-      this.router = new Router();
+      this.port = new Port(null, {https: false});
     });
 
     it('should...', function () {

@@ -18,10 +18,10 @@
     "coverage": "http-server coverage/lcov-report/"
   },
   "dependencies": {
-    "@cork-labs/http-middleware-cookies": "^0.2.0",
-    "@cork-labs/http-middleware-logger": "^0.3.2",
-    "@cork-labs/http-middleware-responses": "^0.4.0",
-    "@cork-labs/http-middleware-trace": "^0.2.1",
+    "@cork-labs/http-middleware-cookies": "^0.3.0",
+    "@cork-labs/http-middleware-logger": "^0.4.0",
+    "@cork-labs/http-middleware-responses": "^0.5.0",
+    "@cork-labs/http-middleware-trace": "^0.2.2",
     "body-parser": "^1.18.2",
     "cookie-parser": "^1.4.3",
     "cors": "^2.8.4",
