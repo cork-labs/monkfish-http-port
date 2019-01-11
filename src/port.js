@@ -117,10 +117,10 @@ class Port {
   _onError (err) {
     switch (err.code) {
       case 'EACCES':
-        this._logger.error(Object.assign({}, { err }, this._info()), 'monkfish.port.http.privileges-required');
+        this._logger.error('monkfish.port.http.privileges-required', this._info(), err);
         process.exit(1);
       case 'EADDRINUSE':
-        this._logger.error(Object.assign({}, { err }, this._info()), 'monkfish.port.http.already-in-use');
+        this._logger.error('monkfish.port.http.already-in-use', this._info(), err);
         process.exit(1);
       default:
         throw err;
@@ -130,7 +130,7 @@ class Port {
   _onListening () {
     const obj = this._server.address();
     const address = obj.address + ':' + obj.port;
-    this._logger.info({ address }, 'monkfish.port.http.listening');
+    this._logger.info('monkfish.port.http.listening', { http_address: address });
   }
 
   _normalizePort (value) {
@@ -190,7 +190,7 @@ class Port {
     this._express.use((err, req, res, next) => {
       this._handleError(err, req, res, this._errorHandlers.slice(0))
         .catch((err) => {
-          req.logger.error({ err, api: this._name }, 'monkfish.port.http.unhandled');
+          req.logger.error('monkfish.port.http.unhandled', { api: this._name }, err);
           if (!res.headersSent) {
             if (this._config.error.debug) {
               return res.response.internalServerError(err.name, err.details);
@@ -202,7 +202,7 @@ class Port {
     });
 
     return new Promise((resolve, reject) => {
-      this._logger.info(this._info(), 'monkfish.port.http.start');
+      this._logger.info('monkfish.port.http.start', this._info());
       this._server.listen(this._port);
       this._server.on('error', this._onError.bind(this));
       this._server.on('listening', () => {

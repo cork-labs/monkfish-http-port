@@ -47,7 +47,7 @@ class HttpRouter {
     const interceptor = pipeline.shift();
     return Promise.resolve()
       .then(() => interceptor.handle(req, res, result, context))
-      .catch((err) => req.logger.error({ err, interceptor: interceptor.name }, 'monkfish.port.http.router.post-request'))
+      .catch((err) => req.logger.error('monkfish.port.http.router.post-request', { interceptor: interceptor.name }, err))
       .then(() => this._postRequest(req, res, result, context, interceptors, pipeline));
   }
 
