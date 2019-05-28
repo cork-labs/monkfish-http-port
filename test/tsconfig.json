@@ -1,0 +1,9 @@
+{
+  "extends": "../tsconfig.json",
+  "references": [
+    { "path": "../src" }
+  ],
+  "compilerOptions": {
+    "composite": true
+  }
+}
